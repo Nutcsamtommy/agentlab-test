@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/home/luxz/Agent_lab/agent_lab/hooks/guard_hook.py\" \"/home/luxz/Agent_lab/agent_lab/projects/test/workspace/project\" --write-only-tests"
+            "command": "python3 \"/home/luxz/Agent_lab/agent_lab/hooks/guard_hook.py\" \"/home/luxz/Agent_lab/agent_lab/projects/test/workspace/project\""
           }
         ]
       }

@@ -1,0 +1,33 @@
+worker_processes  1;
+daemon on;
+pid __PID_FILE__;
+error_log __ERROR_LOG__ warn;
+
+events {
+    worker_connections 2048;
+}
+
+http {
+    include       __NGINX_PREFIX__/conf/mime.types;
+    default_type  application/octet-stream;
+    access_log __ACCESS_LOG__;
+    sendfile on;
+    keepalive_timeout 65;
+
+    server {
+        listen __PORT__ ssl;
+        http2 on;
+        server_name localhost;
+
+        ssl_certificate      __CERT_DIR__/server.crt;
+        ssl_certificate_key  __CERT_DIR__/server.key;
+        ssl_protocols        TLSv1.3;
+        ssl_ecdh_curve        __GROUP__;
+
+        location / {
+            root  __WWW_DIR__;
+            index index.json;
+            try_files /index.json =404;
+        }
+    }
+}

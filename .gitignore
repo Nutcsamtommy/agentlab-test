@@ -1,3 +1,10 @@
 node_modules/
 dist/
 .claude/
+
+# PQC TLS benchmark: local build artifacts (regenerable, see DELIVERY_REPORT.md),
+# runtime state, and a generated self-signed TLS private key.
+build/
+openssl-3.5/
+nginx-pqc/
+run/

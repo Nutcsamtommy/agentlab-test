@@ -1,0 +1,56 @@
+{
+  "comparison_basis": "relative",
+  "status": "completed",
+  "environment": {
+    "openssl_version": "OpenSSL 3.0.13 30 Jan 2024",
+    "h2load_version": "nghttp2/1.59.0",
+    "cpu": "ARM Cortex-X925/Cortex-A725 (aarch64, 20 cores)",
+    "os": "Ubuntu 24.04.4 LTS",
+    "go_version": "not_found",
+    "container_runtime": "Docker version 29.2.1, build a5c7197",
+    "concurrency": 100,
+    "duration_seconds": 30,
+    "mlkem_availability": "standalone_build",
+    "mlkem_tool_detail": "OpenSSL 3.5.4 built from source to project-local prefix openssl-3.5/ (P2); nginx 1.27.4 statically linked against that OpenSSL source tree via --with-openssl. System OpenSSL 3.0.13 untouched and verified unaffected."
+  },
+  "key_exchange_groups": {
+    "baseline": "X25519",
+    "measured": "MLKEM512"
+  },
+  "tls_implementation": {
+    "baseline": "nginx 1.27.4 (static build, linked against project-local OpenSSL 3.5.4)",
+    "measured": "nginx 1.27.4 (static build, linked against project-local OpenSSL 3.5.4)",
+    "same_implementation": true
+  },
+  "metrics": [
+    {
+      "name": "avg_connection_establishment_time_ms",
+      "baseline": 37.4,
+      "measured": 41.66,
+      "claimed_change": "+23%",
+      "relative_change": "+11.4%"
+    },
+    {
+      "name": "avg_request_latency_ms",
+      "baseline": 0.8703,
+      "measured": 0.8413,
+      "claimed_change": "+1.3%",
+      "relative_change": "-3.3%"
+    },
+    {
+      "name": "requests_per_second_per_client",
+      "baseline": 1070.62,
+      "measured": 1076.64,
+      "claimed_change": "-1.6%",
+      "relative_change": "+0.6%"
+    },
+    {
+      "name": "error_count",
+      "baseline": 0,
+      "measured": 0,
+      "claimed_change": "0",
+      "relative_change": "N/A"
+    }
+  ],
+  "notes": "TLS 實作為 nginx 1.27.4 靜態連結本專案獨立編譯的 OpenSSL 3.5.4(專案內 build/openssl-src/openssl-3.5.4 -> openssl-3.5/),非論文使用的 OpenSSL+OQS-provider 組合,而是 OpenSSL 3.5 原生 ML-KEM 支援;系統路徑 OpenSSL 3.0.13 全程未變動(已用 `env -u LD_LIBRARY_PATH openssl version` 驗證)。openssl s_server 不具備 HTTP/2 framing,故改用同一套 nginx 二進位作為 X25519 與 MLKEM512 兩組態的伺服器,僅變動 ssl_ecdh_curve 指令。h2load 為系統封裝(動態連結系統 libssl),因此以 LD_LIBRARY_PATH 指向專案內 OpenSSL 3.5.4 的方式讓同一顆 h2load 二進位取得 MLKEM512 group 支援,並用 --groups 參數強制兩組態各自只提供對應群組,確保用同一套 TLS 實作比較。金鑰交換群組選用 MLKEM512(純 ML-KEM,非 hybrid),因本機獨立編譯的 OpenSSL 3.5.4 原生支援此群組。T2 評估過程:P1 Go crypto/tls 不可行(本機未安裝 go,`go version` 回傳 command not found);P2 獨立編譯 OpenSSL 3.5.4 成功(約 2 分鐘內完成,遠低於 30 分鐘上限),故未嘗試 P3 容器方案(Docker 雖已安裝,P2 已成功即依優先序停止嘗試)。量測方法:每組態各執行 3 次(每次 30 秒、併發 100),取平均值作為 baseline/measured,以降低單次量測的雜訊。已知限制:本機為共用開發機、nginx worker_processes=1、單次量測 connect time 波動範圍約 29~53ms(標準差相對較大),3 次平均後的相對變化量(+11.4% connect time)方向與論文一致但量級較小;request latency 與 req/s per client 的相對變化量甚至與論文方向相反(本機噪訊值域內,可能同號亦可能反號),不宣稱可比較論文絕對數值或必然重現其變化方向,僅提供本機環境下的相對量測結果作參考。"
+}

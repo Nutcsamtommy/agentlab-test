@@ -1,228 +1,378 @@
 
 
-# SPEC.md — 階段 S001:文獻整理(不改程式碼的 PQC 遷移)
+# SPEC.md — PQC 混合金鑰交換 TLS 握手開銷量測
 
-**日期:** 2026-09-30(最終版,整合人類回覆)
-**狀態:** 已確認,交付物完成,送審中
-
----
-
-## 1. 目標
-
-產出一份聚焦文獻整理文件,回答:
-
-> 以反向代理(WAF)完成 PQC 遷移,在學術上有哪些既有做法與已知風險?
-
-聚焦 **TLS 終止層**的遷移策略,檢索範圍 **2024 年(含)之後**。
-非系統性回顧、非定量統合分析。
-
-**TLS 終止層定義(廣義):** 涵蓋所有 TLS 終止元件,包括 WAF、反向代理、API gateway、load balancer、web server。附件論文的核心論點——「TLS 終止分散在這些元件上,每一個都是獨立的遷移目標」——與本專案的問題意識一致。
+**日期:** 2026-09-30
+**來源需求:** stage_s002.md
+**論文:** Balaji et al., arXiv:2605.17955v1, §V-D
+**版本:** v2(整合人類回覆)
 
 ---
 
-## 2. 交付物
+## 1. 目標與範圍
 
-| 項目 | 說明 |
+在本機環境下,以 h2load 對一個 TLS 1.3 HTTP/2 伺服器進行量測,比較 **X25519**(基準)與 **ML-KEM-512**(或環境僅支援的 X25519MLKEM768)兩種金鑰交換群組的:
+
+- 平均連線建立時間
+- 端對端請求延遲
+- 每客戶端請求速率
+- 錯誤數
+
+比較基準為 **relative**(相對於 X25519 的變化率),不追求與論文相同的絕對毫秒數。
+
+### 非目標(明確排除)
+
+- 不複現 §III 組態解析框架
+- 不複現 §IV 大規模 Nginx 量測
+- 不複現 §V-A~C OCBC 實際部署
+- 不做 ML-DSA 憑證層實驗
+- 不追求論文絕對數值
+- **不以不等價替代方案宣稱複現**
+
+---
+
+## 2. 技術棧說明
+
+本項目為 **效能量測腳本**,非典型 Web 應用。實作為:
+
+| 層 | 技術 |
 |---|---|
-| `LITERATURE_REVIEW.md` | 主文件,含以下章節(見 §4 結構) |
-| `REFERENCES.md` | 完整參考清單,每條附可驗證出處 |
+| 量測腳本 | Bash(或 Python,取本機可用者) |
+| TLS 伺服器 | 依 T2 評估結果決定(見 §3 T2) |
+| 負載工具 | h2load(nghttp2/1.59.0,路徑 `/usr/bin/h2load`) |
+| 產出 | results.json(純資料,無 API) |
+| 驗證 | 腳本可重複執行 + JSON schema 檢查 |
 
-**篇幅原則:** 以充分回答問題為準,不設字數下限。寧可短而準確,不要為了篇幅而灌水或重複。
+> 本項目不涉及 Angular / NestJS / Jest 前端後端架構。
+
+### 已確認環境事實
+
+| 項目 | 值 |
+|---|---|
+| h2load | 已安裝,nghttp2/1.59.0,`/usr/bin/h2load` |
+| 系統 OpenSSL | 3.0.13(不支援 ML-KEM,不得更動) |
+| Docker/Podman | 未確認,需 T2 中偵測 |
+| Go 1.24+ | 未確認,需 T2 中偵測 |
 
 ---
 
 ## 3. 任務清單
 
-### T1 — 解析附件論文並萃取關鍵發現
+### T1 — 環境偵測與記錄
 
-**輸入:** `attachments/s001/pqc-financial.pdf.txt`(Balaji et al., arXiv:2605.17955v1, 2026)
-**備註:** 完整 PDF 位於 `attachments/s001/pqc-financial.pdf`。若 Coder 能自行讀取完整 PDF 則優先使用;若僅能使用已解析文字(`.pdf.txt`),則在文件「限制」中明寫哪些章節未能完整閱讀。
-
-**工作:**
-- 萃取該論文與「TLS 終止層 PQC 遷移」直接相關的發現:
-  - 配置解析方法論(C1)
-  - 金融機構 PoC 部署(C2):ML-KEM-512、X25519-ML-KEM-768 於 web server / API gateway 啟用,零應用層改動
-  - 8,443 份 Nginx 配置的大規模測量(C3)
-- 記錄該論文明確指出的風險與限制(§V-F)
-- 若文字截斷導致某些章節無法完整閱讀,記錄截斷位置,不得假設截斷部分的內容
+**描述:** 偵測本機 OpenSSL 版本、h2load 版本(已知 nghttp2/1.59.0)、CPU 型號、作業系統版本、Go 版本(若存在)、Docker/Podman 版本(若存在)。將結果寫入 `results.json` 的 `environment` 欄位。
 
 **驗收條件:**
-- [x] 產出結構化筆記(可為 `LITERATURE_REVIEW.md` 的草稿段落),涵蓋 C1/C2/C3 三項貢獻
-- [x] 每條發現標註原文章節號(如 §III、§V)
-- [x] 風險/限制部分至少列出論文中明確提及的 ≥ 3 項
-- [x] 若存在截斷,筆記中標明「§X 起未能完整閱讀」
+- 執行 `openssl version` 輸出被記錄
+- 執行 `h2load -v` 結果被記錄(預期 `nghttp2/1.59.0`)
+- `lscpu` 或 `sysctl -n machdep.cpu.brand_string` 的 CPU 資訊被記錄
+- `go version`(若存在)被記錄;不存在則記錄 `"go_version": "not_found"`
+- `docker --version` 或 `podman --version`(若存在)被記錄;皆不存在則記錄 `"container_runtime": "not_found"`
+- `results.json` 中 `environment` 物件含 `openssl_version`、`h2load_version`、`cpu`、`os`、`concurrency`(=100)、`duration_seconds`(=30)
 
 ---
 
-### T2 — 整理「既有做法」(Existing Approaches)
+### T2 — ML-KEM 可行性評估(關鍵分支)
 
-**工作:**
-- 從 T1 萃取的發現中,歸納出以 TLS 終止層(反向代理、WAF、API gateway、load balancer、web server)為遷移切入點的既有做法
-- **本階段文獻來源僅限附件論文一篇**(Coder 無網路檢索能力)。須在文件開頭以醒目聲明標註:「本整理僅基於單一來源(Balaji et al., 2026)」
-- **嚴禁依訓練記憶列出未經驗證的論文或做法。** 所有條目必須可追溯至附件論文原文
-- 每項做法須包含:方法名稱、適用場景、關鍵技術(如 hybrid key exchange)、是否需應用層改動
+**描述:** 依以下**固定優先順序**評估,判斷本機能否取得支援 ML-KEM 的 TLS 環境:
+
+| 優先序 | 方案 | 判定條件 |
+|---|---|---|
+| **P1** | Go 1.24+ `crypto/tls` | `go version` ≥ 1.24,且可編譯出 TLS 1.3 HTTP/2 伺服器 |
+| **P2** | 獨立編譯 OpenSSL 3.5+ | 可編譯至 `/opt/openssl-3.5/` 或 `~/openssl-3.5/`,不影響系統路徑 |
+| **P3** | 容器(Docker/Podman) | `docker` 或 `podman` 存在,可拉取含 OpenSSL 3.5+ 的映像 |
+| **P4** | 本機原生 OpenSSL | 已知 3.0.13,不支援 ML-KEM → **直接排除** |
+
+**各方案約束:**
+
+- **P1 (Go):**
+  - 基準組(X25519)與實驗組(ML-KEM)**必須使用同一套 Go `crypto/tls` 實作**,只變動金鑰交換群組。
+  - 不得用 Go 跑 ML-KEM、用 OpenSSL 跑 X25519(無效比較)。
+  - 若採用此方案,`status` 仍可為 `completed`,但 `notes` 必須寫明:「TLS 實作為 Go crypto/tls,非論文使用的 OpenSSL+OQS,絕對數值不可比。差距歸因列入環境差異。」
+
+- **P2 (獨立編譯):**
+  - 編譯目標路徑:`/opt/openssl-3.5/` 或 `~/openssl-3.5/`。
+  - **絕對不得更動系統路徑的 OpenSSL。**
+  - 若編譯時間超過 **30 分鐘**或相依性不足,不必勉強,記錄嘗試過程後改走 P3。
+
+- **P3 (容器):**
+  - 需先確認 `docker --version` 或 `podman --version` 存在。
+  - 拉取含 OpenSSL 3.5+ 的映像(如 `openssl:3.5` 或自建)。
+  - 容器內外的 h2load 版本可能不同,**可接受**,但必須在 `results.json` 的 `environment` 中記錄宿主機與容器內兩者的實際版本。
+  - 容器內的 TLS 伺服器與宿主機的 h2load 之間需有網路通路(通常 `localhost` 或 `--network host`)。
 
 **驗收條件:**
-- [x] 至少列出 2 項可辨識的「做法」(例如:配置解析→策略比對→啟用 hybrid KEX;TLS 終止點就地啟用 PQC 套件)
-- [x] 每項做法附出處(論文 + 章節)
-- [x] 文件開頭有醒目聲明:「本整理僅基於單一來源」
-- [x] 無任何未經驗證的外部引用
+- 評估結果記錄於 `results.json` 的 `environment.mlkem_availability` 欄位,值為:
+  - `"go"`(P1 成功)
+  - `"standalone_build"`(P2 成功)
+  - `"container"`(P3 成功)
+  - `"unavailable"`(P1~P3 皆失敗)
+- 若為 `unavailable`,T3~T7 跳過,直接進入 T8(blocked_env 路徑)
+- 若為其他值,記錄實際使用的工具與版本於 `environment.mlkem_tool_detail`
+- 評估過程(嘗試了哪些方案、各自結果)記錄於 `notes`
+
+**約束:**
+- **不得升級或替換系統 OpenSSL**
+- 若使用 Go,必須確認其 TLS 1.3 實作與 h2load 的 HTTP/2 協定相容;若不相容,視為該方案失敗,繼續下一優先序
+- 不得以「用 AES-GCM 替代 ML-KEM」等方式產出數字並宣稱複現
 
 ---
 
-### T3 — 整理「已知風險」(Known Risks)
+### T3 — 建立 TLS 1.3 HTTP/2 伺服器(X25519 組態)
 
-**工作:**
-- 從 T1 萃取的發現中,歸納 TLS 終止層 PQC 遷移的已知風險,至少涵蓋:
-  - 配置能見度不足(allowed vs. negotiated 的落差)
-  - 異質端點管理複雜度
-  - 效能開銷(論文報告的 100 併發基準)
-  - 未來演算法升級的持續維護成本
-  - 論文自身聲明的限制
-- 每項風險附出處
-- 若因截斷導致某項風險的原文不完整,標註「原文截斷,僅基於可讀部分歸納」
+**描述:** 啟動一個 TLS 1.3 HTTP/2 伺服器,金鑰交換群組固定為 X25519,回應固定大小的 HTTP/2 回應(1 KB JSON)。
+
+**TLS 實作:** 依 T2 結果決定(Go / 獨立編譯 OpenSSL / 容器內 OpenSSL)。
 
 **驗收條件:**
-- [x] 至少列出 4 項風險
-- [x] 每項風險附出處(論文 + 章節或段落)
-- [x] 風險描述不超出論文原文聲稱的範圍(不推測、不 extrapolate)
-- [x] 截斷影響的條目有明確標註
+- 伺服器可被 `curl --http2 -v https://localhost:<port>/` 成功連線
+- TLS 1.3 握手成功,金鑰交換群組為 X25519(以 `openssl s_client` 或 `curl -v` 輸出確認)
+- 回應體大小固定(記錄於腳本,兩組態相同)
 
 ---
 
-### T4 — 撰寫結論:直接回答開頭問題
+### T4 — 建立 TLS 1.3 HTTP/2 伺服器(ML-KEM 組態)
 
-**工作:**
-- 用 1–2 段(≤ 300 字)直接回答:「以反向代理(WAF)完成 PQC 遷移,在學術上有哪些既有做法與已知風險」
-- 結論必須與 T2、T3 內容一致,不得引入新論點
-- 結論中須明寫:「本整理目前僅基於 Balaji et al. (2026) 一篇文獻」
+**描述:** 同 T3,但金鑰交換群組改為 ML-KEM-512(或環境僅支援的 X25519MLKEM768)。若環境只支援混合群組,記錄實際群組名稱。
+
+**TLS 實作:** **必須與 T3 使用同一套 TLS 實作**(同一語言/同一二進位/同一容器映像),只變動金鑰交換群組參數。
 
 **驗收條件:**
-- [x] 結論段落存在且 ≤ 300 字
-- [x] 結論中提到的每項做法/風險均可在 T2/T3 中找到對應條目
-- [x] 結論含單一來源聲明
+- 伺服器可被 h2load 成功連線
+- TLS 1.3 握手成功,金鑰交換群組為 ML-KEM-512 或 X25519MLKEM768(記錄實際值)
+- 回應體大小與 T3 完全相同
+- TLS 實作與 T3 一致(記錄於腳本註解或 `results.json`)
+
+> 若 T2 判定 `unavailable`,本任務不執行。
 
 ---
 
-### T5 — 參考清單與出處驗證
+### T5 — 撰寫量測腳本
 
-**工作:**
-- 建立 `REFERENCES.md`,格式見 §5
-- 逐條驗證出處可達性(arXiv ID 可解析、DOI 可解析、URL 可存取)
-- 本階段預期僅有 1 條參考(附件論文)。若 Coder 無法驗證 arXiv ID 可達性,標註「出處待驗證」並回報,不得自行編造
+**描述:** 建立 `measure.sh`(或 `measure.py`),接受一個參數表示組態(`x25519` / `mlkem`),啟動對應伺服器、執行 h2load 量測、關閉伺服器,輸出結構化結果。
 
-**驗收條件:**
-- [x] 每條參考含:作者、標題、年份、出處(期刊/會議/arXiv)、可驗證標識符(arXiv ID / DOI / URL)
-- [x] 主文件中所有引用標記(如 [1])在 `REFERENCES.md` 中有對應條目
-- [x] 無「TBD」「待補」等佔位符
-- [x] 無未經驗證的外部參考
+**固定參數(兩種組態必須相同):**
 
----
-
-## 4. 文件結構(`LITERATURE_REVIEW.md`)
-
-```markdown
-# 文獻整理:以反向代理(WAF)完成 PQC 遷移的既有做法與已知風險
-
-> 檢索範圍:2024 年(含)之後,聚焦 TLS 終止層遷移策略。
-> 本文件非系統性回顧,非定量統合分析。
-> ⚠️ **本整理僅基於單一來源(Balaji et al., 2026)。**
-> TLS 終止層定義:WAF、反向代理、API gateway、load balancer、web server。
-
-## 1. 既有做法
-### 1.1 [做法名稱]
-...
-
-## 2. 已知風險
-### 2.1 [風險名稱]
-...
-
-## 3. 結論
-[直接回答開頭問題,≤ 300 字]
-
-## 4. 限制與後續
-- 本整理僅基於單一來源,完整的文獻整理需要外部檢索能力,目前未具備
-- [若適用] 附件文字截斷:§X 起未能完整閱讀
-- 本整理的範圍限制(非系統性回顧、非定量統合)
-- 建議後續可補充的方向
-```
-
----
-
-## 5. 參考格式(`REFERENCES.md`)
-
-```markdown
-[1] H. Balaji, A. Varshney, P. Ravi, S. Jain, R. Foe, J. Seet,
-    H. Wang, K.-Y. Lam, A. Chattopadhyay.
-    "Operationalising Post-Quantum TLS: Automated Configuration
-    Profiling and Hybrid PQC Deployment in Financial Infrastructure."
-    2026. arXiv:2605.17955v1 [cs.CR].
-    https://arxiv.org/abs/2605.17955
-```
-
-每條必須含:作者、標題、年份、出處、可驗證標識符。
-
-> **更正記錄:** 原始 SPEC 中 arXiv ID 誤寫為 `2505.17955v1 (2025)`。Coder 於交付時更正為 `2605.17955v1 (2026-05-18)`,人類已另行查證確認更正正確(見 §9 #6)。
-
----
-
-## 6. 資料模型 / API 契約
-
-本階段為純文獻整理,無程式碼、無 API、無資料模型。
-交付物為 Markdown 文件,驗收以文件內容與格式為準。
-
----
-
-## 7. 學術誠實規則(適用本階段)
-
-本階段為**文獻整理**,非實驗複現。MODE_RULES 中「複現的二元定義」與「差距歸因」兩節**不適用**。
-
-適用規則:
-
-| 規則 | 說明 |
+| 參數 | 值 |
 |---|---|
-| 誠實優先於完成 | 寧可標註「無法驗證」也不得編造 |
-| 出處必須可驗證 | 每條引用須有 arXiv ID / DOI / URL;無法驗證則標註「出處待驗證」並回報 |
-| 不得編造 | 嚴禁依訓練記憶列出未經驗證的論文、數字或做法 |
-| 數字歸屬 | 引用論文數字時,必須標註「論文報告」或「[1] 報告」,不得省略出處 |
-| 截斷透明 | 若附件文字截斷導致某些章節無法完整閱讀,必須在文件「限制」中明寫,不得假設截斷部分的內容 |
-| 不推測 | 風險與做法描述不超出論文原文聲稱的範圍 |
+| 併發連線數 | 100 |
+| 持續時間 | 30 秒 |
+| 請求路徑 | `/` |
+| 請求方法 | GET |
+| 回應大小 | 固定 1 KB(由伺服器端決定,兩組態相同) |
+| h2load 額外參數 | 不附加(或記錄任何必要參數) |
+
+**驗收條件:**
+- 腳本存在於 project 目錄下
+- 執行 `./measure.sh x25519` 與 `./measure.sh mlkem` 時,除伺服器端金鑰交換群組外,h2load 的命令行參數完全一致(可用 `set -x` 或腳本內 echo 驗證)
+- 腳本可重複執行(第二次執行不會因殘留狀態失敗;需處理 port 佔用)
+- 腳本輸出包含:平均連線建立時間(ms)、平均請求延遲(ms)、請求速率(req/s)、錯誤數
+- 腳本負責啟動與關閉伺服器(或提供 `start_server.sh <config>` / `stop_server.sh` 輔助腳本)
 
 ---
 
-## 8. 非目標(明確排除)
+### T6 — 執行 X25519 基準量測
 
-- 不做系統性回顧(不定義檢索式、不記錄檢索過程)
-- 不做定量統合分析(不計算 effect size、不做 meta-analysis)
-- 不撰寫程式碼
-- 不部署任何系統
-- 不超出 2024 年之前的文獻(除非作為背景一筆帶過)
-- 不依訓練記憶補充未經驗證的外部文獻
+**描述:** 啟動 X25519 伺服器,執行 `./measure.sh x25519`,記錄結果。
 
----
-
-## 9. 人類已確認事項
-
-| # | 事項 | 裁決 | 日期 |
-|---|---|---|---|
-| 1 | 來源範圍 | 僅限附件 `pqc-financial.pdf` 一篇;Coder 無網路檢索能力;不得依訓練記憶列出未經驗證論文 | 2026-09-30 |
-| 2 | WAF 定義邊界 | 廣義:涵蓋 WAF、反向代理、API gateway、load balancer、web server 等所有 TLS 終止元件 | 2026-09-30 |
-| 3 | 附件截斷 | 接受僅基於已解析文字;完整 PDF 在 `attachments/s001/pqc-financial.pdf`(能讀取更好,不強制);須在「限制」中明寫未完整閱讀的章節 | 2026-09-30 |
-| 4 | 交付長度 | 不設字數下限;以充分回答為準;寧短勿灌水 | 2026-09-30 |
-| 5 | MODE_RULES 適用性 | 確認:本階段非複現;「複現的二元定義」與「差距歸因」不適用;適用「誠實優先」「出處可驗證」「不得編造」 | 2026-09-30 |
-| 6 | arXiv ID 更正 | Coder 將 SPEC 原稿的 `2505.17955v1 (2025)` 更正為 `2605.17955v1 (2026-05-18)`,人類已另行查證,確認更正正確 | 2026-09-30 |
-| 7 | 交付物品質 | 人類確認 `LITERATURE_REVIEW.md` 與 `REFERENCES.md` 內容完整且品質良好,不需重寫,直接送審 | 2026-09-30 |
+**驗收條件:**
+- 量測完成,錯誤數 = 0(若非零,記錄實際值)
+- 結果暫存供 T8 使用
 
 ---
 
-## 10. 系統事件記錄(透明性)
+### T7 — 執行 ML-KEM 量測
 
-| 日期 | 事件 | 影響 | 處置 |
-|---|---|---|---|
-| 2026-09-30 | Reviewer 取 diff 方式有缺陷:以「git add -A 後看暫存區」比對,但 Coder 已 commit,暫存區為空,Reviewer 誤判為零產出 | 無實際交付影響;交付物本身完整 | 系統已修正為與「上一次通過審查的 commit」比對;人類確認交付物無需重寫,直接送審 |
+**描述:** 啟動 ML-KEM 伺服器,執行 `./measure.sh mlkem`,記錄結果。
+
+**驗收條件:**
+- 量測完成,錯誤數 = 0(若非零,記錄實際值)
+- 結果暫存供 T8 使用
+
+> 若 T2 判定 `unavailable`,本任務不執行。
+
+---
+
+### T8 — 產出 results.json
+
+**描述:** 彙整 T1~T7 結果,寫入 `results.json`。
+
+**驗收條件:**
+- 檔案存在且為合法 JSON(`python3 -m json.tool results.json` 或 `jq .` 通過)
+- `comparison_basis` 欄位值為 `"relative"`
+- `status` 欄位值為 `"completed"` 或 `"blocked_env"`
+- 若 `status` = `"completed"`:
+  - `metrics` 陣列含 4 個物件,每個有 `name` / `baseline` / `measured` / `claimed_change` / `relative_change`
+  - `baseline` 為 X25519 實測值
+  - `measured` 為 ML-KEM 實測值
+  - `claimed_change` 為論文宣稱的變化(字串,如 `"+23%"`)
+  - `relative_change` 為 `(measured - baseline) / baseline` 的百分比
+  - 若 TLS 實作為 Go(非 OpenSSL+OQS),`notes` 必須包含環境差異聲明(見 T2 P1 約束)
+- 若 `status` = `"blocked_env"`:
+  - `metrics` 為空陣列或不存在
+  - `notes` 欄位寫明:缺少什麼、嘗試過哪些方案(P1/P2/P3)、各自卡在哪裡、為何不可行
+- `environment` 欄位完整(見 T1)
+- 若使用容器方案,`environment` 中須記錄宿主機 h2load 版本與容器內 h2load 版本
+
+---
+
+### T9 — 撰寫交付報告
+
+**描述:** 由 PM 在 Reviewer 通過後撰寫 `DELIVERY_REPORT.md`。
+
+**驗收條件:**
+- 含完成項目清單
+- 含測試/量測結果摘要
+- 含已知限制
+- 含需要人類處理的後續事項
+- 若 T2 觸發 blocked_env,如實記載評估過程(嘗試了哪些方案、各自卡在哪裡)
+- 若使用 Go 方案,明確寫出「TLS 實作為 Go crypto/tls,非論文使用的 OpenSSL+OQS,絕對數值不可比」
+- 若 Coder 被安全防護攔截,如實記載被攔截的操作、人類批示內容、對交付範圍的影響
+
+---
+
+## 4. 資料模型(results.json Schema)
+
+```jsonc
+{
+  "comparison_basis": "relative",
+  "status": "completed" | "blocked_env",
+  "environment": {
+    "openssl_version": "OpenSSL 3.0.13 30 Jan 2024",
+    "h2load_version": "nghttp2/1.59.0",
+    "h2load_version_container": "nghttp2/1.62.0",  // 僅容器方案時存在
+    "cpu": "Apple M2" | "Intel Xeon ...",
+    "os": "macOS 15.1" | "Ubuntu 24.04",
+    "go_version": "go1.24.1" | "not_found",
+    "container_runtime": "Docker version 27.0" | "not_found",
+    "concurrency": 100,
+    "duration_seconds": 30,
+    "mlkem_availability": "go" | "standalone_build" | "container" | "unavailable",
+    "mlkem_tool_detail": "go1.24.1 crypto/tls" | "OpenSSL 3.5.0 (~/openssl-3.5/)" | "container: openssl:3.5"
+  },
+  "key_exchange_groups": {
+    "baseline": "X25519",
+    "measured": "ML-KEM-512" | "X25519MLKEM768"
+  },
+  "tls_implementation": {
+    "baseline": "go crypto/tls" | "OpenSSL 3.5.0 s_server" | "container openssl s_server",
+    "measured": "go crypto/tls" | "OpenSSL 3.5.0 s_server" | "container openssl s_server",
+    "same_implementation": true  // 必須為 true
+  },
+  "metrics": [
+    {
+      "name": "avg_connection_establishment_time_ms",
+      "baseline": 24.7,
+      "measured": 30.4,
+      "claimed_change": "+23%",
+      "relative_change": "+23.1%"
+    },
+    {
+      "name": "avg_request_latency_ms",
+      "baseline": 12.3,
+      "measured": 12.5,
+      "claimed_change": "+1.3%",
+      "relative_change": "+1.6%"
+    },
+    {
+      "name": "requests_per_second_per_client",
+      "baseline": 80.5,
+      "measured": 78.8,
+      "claimed_change": "-1.6%",
+      "relative_change": "-2.1%"
+    },
+    {
+      "name": "error_count",
+      "baseline": 0,
+      "measured": 0,
+      "claimed_change": "0",
+      "relative_change": "N/A"
+    }
+  ],
+  "notes": "任何補充說明。若 TLS 實作為 Go:「TLS 實作為 Go crypto/tls,非論文使用的 OpenSSL+OQS,絕對數值不可比。差距歸因列入環境差異。」若 blocked_env: 記錄嘗試過程。"
+}
+```
+
+> 上例數值僅為格式示範,非預期結果。
+
+---
+
+## 5. API 契約(量測腳本介面)
+
+本項目無 HTTP API。腳本介面如下:
+
+### measure.sh / measure.py
+
+```
+用法: ./measure.sh <config>
+參數:
+  config: "x25519" | "mlkem"
+行為:
+  1. 啟動對應組態的 TLS 1.3 HTTP/2 伺服器
+  2. 等待伺服器就緒(health check)
+  3. 執行 h2load 量測
+  4. 關閉伺服器
+  5. 輸出結構化結果
+輸出(stdout): 結構化量測結果(供腳本解析)
+輸出(stderr): 除錯資訊
+退出碼: 0 = 成功, 1 = 失敗(伺服器未啟動、h2load 錯誤等)
+```
+
+### h2load 固定參數
+
+```
+h2load -c 100 --timeout 30000 https://localhost:<port>/
+```
+
+> 實際參數以腳本內固定值為準;兩種組態的 h2load 命令行必須逐字相同(除 port 若不同)。
+
+---
+
+## 6. 執行流程
+
+```
+T1 環境偵測
+  └→ T2 ML-KEM 可行性評估(優先序: Go → 獨立編譯 → 容器)
+       ├→ unavailable → T8 (status=blocked_env) → T9
+       └→ 可用 → T3 啟動 X25519 伺服器(同一 TLS 實作)
+                  └→ T5 確認量測腳本
+                       └→ T6 執行 X25519 量測
+                            └→ T4 啟動 ML-KEM 伺服器(同一 TLS 實作)
+                                 └→ T7 執行 ML-KEM 量測
+                                      └→ T8 產出 results.json
+                                           └→ T9 交付報告
+```
+
+---
+
+## 7. 約束與紅線
+
+| # | 約束 |
+|---|---|
+| C1 | **不得升級、替換或移除系統 OpenSSL** |
+| C2 | 不得以不等價替代方案(如僅改對稱加密、改 TLS 版本)產出數字並宣稱複現 |
+| C3 | 兩種組態的 h2load 參數(除金鑰交換群組外)必須完全相同 |
+| C4 | 若 ML-KEM 不可用,必須回報 `blocked_env`,不得降級為「只跑 X25519 然後估算」 |
+| C5 | 所有版本資訊必須為實測值,不得手填 |
+| C6 | **基準組與實驗組必須使用同一套 TLS 實作**(同一語言/二進位/容器映像),只變動金鑰交換群組。用 Go 跑 ML-KEM、用 OpenSSL 跑 X25519 是無效比較 |
+| C7 | 若使用 Go 方案,`notes` 與交付報告必須聲明「TLS 實作為 Go crypto/tls,非論文使用的 OpenSSL+OQS,絕對數值不可比」 |
+| C8 | 獨立編譯 OpenSSL 時,編譯時間上限 30 分鐘;超時或相依性不足則放棄,改走下一優先序 |
+| C9 | 容器方案中,宿主機與容器內的 h2load 版本若不同,必須在 `environment` 中分別記錄 |
+
+---
+
+## 8. 交付物清單
+
+| 檔案 | 說明 |
+|---|---|
+| `measure.sh`(或 `.py`) | 量測腳本(含伺服器啟動/關閉邏輯) |
+| `results.json` | 量測結果 |
+| `DELIVERY_REPORT.md` | 交付報告(PM 撰寫) |
 
 ---
 
 ## 待人類確認
 
 無待確認事項。
+
+> 所有五項待確認事項已於 HUMAN_INBOX.md 中回覆,並整合至本 SPEC v2。Coder 可依據 T2 的優先順序(Go → 獨立編譯 → 容器)依序嘗試,無需再等待人類批准。
